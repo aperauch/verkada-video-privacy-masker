@@ -14,6 +14,7 @@ export default function VideoPrivacyMasker() {
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isMuted, setIsMuted] = useState(true)
   const [videoTime, setVideoTime] = useState(0)
   const [videoDuration, setVideoDuration] = useState(0)
   const [maskType, setMaskType] = useState<"blur" | "pixelate" | "solid">("blur")
@@ -42,6 +43,7 @@ export default function VideoPrivacyMasker() {
 
         const url = URL.createObjectURL(file)
         setVideoUrl(url)
+        setIsMuted(true)
 
         // Reset other state
         setMasks([])
@@ -505,6 +507,14 @@ export default function VideoPrivacyMasker() {
     drawOverlay()
   }
 
+  // Toggle mute/unmute
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !videoRef.current.muted
+      setIsMuted(!isMuted)
+    }
+  }
+
   // Update canvas when video updates
   useEffect(() => {
     if (videoRef.current) {
@@ -666,6 +676,7 @@ export default function VideoPrivacyMasker() {
                     onTimeUpdate={updateVideoTime}
                     onLoadedMetadata={handleVideoLoaded}
                     playsInline
+                    muted={isMuted}
                   />
 
                   {/* Canvas elements positioned absolutely over the video */}
@@ -690,6 +701,22 @@ export default function VideoPrivacyMasker() {
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="icon" onClick={togglePlayPause}>
                       {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                    </Button>
+
+                    <Button variant="outline" size="icon" onClick={toggleMute}>
+                      {isMuted ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+                          <line x1="23" y1="9" x2="17" y2="15"/>
+                          <line x1="17" y1="9" x2="23" y2="15"/>
+                        </svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                        </svg>
+                      )}
                     </Button>
 
                     <span className="text-xs">
