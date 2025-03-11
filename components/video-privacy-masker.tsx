@@ -196,8 +196,8 @@ export default function VideoPrivacyMasker() {
     if (!videoRef.current || !canvasRef.current || masks.length === 0) return
 
     const video = videoRef.current
-    const canvas = document.createElement("canvas")
-    const ctx = canvas.getContext("2d")
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
 
     if (!ctx) return
 
@@ -210,14 +210,27 @@ export default function VideoPrivacyMasker() {
     setIsPlaying(false)
 
     try {
-      // Get the original video's frame rate if possible, or default to 30fps
-      const fps = 30
+      // Create a MediaStream from the canvas
+      const videoStream = canvas.captureStream()
+      
+      // Get the audio track from the original video
+      const audioStream = (video as any).captureStream()
+      const audioTrack = audioStream?.getAudioTracks?.()?.[0]
+      if (audioTrack) {
+        videoStream.addTrack(audioTrack)
+      }
 
-      // Create a MediaRecorder with better settings
-      const stream = canvas.captureStream(fps)
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "video/webm;codecs=vp9",
-        videoBitsPerSecond: 5000000, // 5 Mbps for better quality
+      // Check for H.264 support
+      const mimeType = MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac') 
+        ? 'video/mp4;codecs=h264,aac'
+        : MediaRecorder.isTypeSupported('video/mp4') 
+          ? 'video/mp4'
+          : 'video/webm;codecs=h264,opus'
+
+      // Create MediaRecorder with H.264 encoding
+      const mediaRecorder = new MediaRecorder(videoStream, {
+        mimeType,
+        videoBitsPerSecond: 8000000 // 8 Mbps for better quality
       })
 
       const chunks: Blob[] = []
@@ -228,76 +241,118 @@ export default function VideoPrivacyMasker() {
       }
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: "video/webm" })
+        // Determine the correct MIME type for the Blob
+        const blobType = mimeType.startsWith('video/mp4') ? 'video/mp4' : 'video/webm'
+        const blob = new Blob(chunks, { type: blobType })
+        
         if (processedVideoUrl) {
           URL.revokeObjectURL(processedVideoUrl)
         }
-        const url = URL.createObjectURL(blob)
-        setProcessedVideoUrl(url)
+
+        // If we couldn't use MP4 directly, we need to convert the WebM to MP4
+        if (!mimeType.startsWith('video/mp4')) {
+          // Create a temporary video element to convert the format
+          const tempVideo = document.createElement('video')
+          tempVideo.src = URL.createObjectURL(blob)
+          tempVideo.muted = true
+
+          tempVideo.onloadedmetadata = () => {
+            const convertCanvas = document.createElement('canvas')
+            convertCanvas.width = tempVideo.videoWidth
+            convertCanvas.height = tempVideo.videoHeight
+            const convertCtx = convertCanvas.getContext('2d')!
+
+            // Start playing to begin conversion
+            tempVideo.play().then(() => {
+              const convertedChunks: Blob[] = []
+              const convertedStream = convertCanvas.captureStream()
+              
+              // Add audio if available
+              if (audioTrack) {
+                convertedStream.addTrack(audioTrack)
+              }
+
+              const convertedRecorder = new MediaRecorder(convertedStream, {
+                mimeType: 'video/mp4;codecs=h264,aac',
+                videoBitsPerSecond: 8000000
+              })
+
+              convertedRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                  convertedChunks.push(e.data)
+                }
+              }
+
+              convertedRecorder.onstop = () => {
+                const convertedBlob = new Blob(convertedChunks, { type: 'video/mp4' })
+                const url = URL.createObjectURL(convertedBlob)
+                setProcessedVideoUrl(url)
+                URL.revokeObjectURL(tempVideo.src)
+              }
+
+              // Draw frames for conversion
+              const convertFrame = () => {
+                if (tempVideo.ended || tempVideo.paused) {
+                  convertedRecorder.stop()
+                  return
+                }
+                convertCtx.drawImage(tempVideo, 0, 0, convertCanvas.width, convertCanvas.height)
+                requestAnimationFrame(convertFrame)
+              }
+
+              convertedRecorder.start(1000)
+              convertFrame()
+            })
+          }
+        } else {
+          // We got MP4 directly, just use it
+          const url = URL.createObjectURL(blob)
+          setProcessedVideoUrl(url)
+        }
       }
 
-      mediaRecorder.start()
+      // Request data frequently to ensure we capture everything
+      mediaRecorder.start(1000) // Capture in 1-second chunks
 
       // Reset video to beginning
       video.currentTime = 0
 
-      // Use requestAnimationFrame for better timing
-      const lastTime = -1
-      let processing = true
-
-      const processNextFrame = () => {
-        if (!processing) return
-
-        // Draw the current video frame
+      // Function to process current frame
+      const processFrame = () => {
+        // Draw the current frame
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
+        
         // Apply masks
         masks.forEach((mask) => {
           applyMaskEffect(ctx, mask)
         })
-
-        // Check if we've reached the end of the video
-        if (video.currentTime >= video.duration - 0.1) {
-          processing = false
-          mediaRecorder.stop()
-          return
-        }
-
-        // Advance to next frame with better timing
-        const targetTime = video.currentTime + 1 / fps
-
-        // Only seek if we need to move forward by a meaningful amount
-        if (targetTime > video.currentTime + 0.01) {
-          video.currentTime = targetTime
-        }
-
-        // Wait for the seek to complete
-        const checkSeek = () => {
-          if (Math.abs(video.currentTime - targetTime) < 0.01 || video.currentTime > targetTime) {
-            requestAnimationFrame(processNextFrame)
-          } else {
-            // If seek hasn't completed yet, check again soon
-            setTimeout(checkSeek, 5)
-          }
-        }
-
-        checkSeek()
       }
 
-      // Handle the seeked event to start processing
-      video.addEventListener("seeked", function onSeeked() {
-        // Start processing the first frame
-        if (processing && video.currentTime < 0.1) {
-          requestAnimationFrame(processNextFrame)
+      // Handle video playback
+      video.onplaying = () => {
+        const drawFrame = () => {
+          if (video.paused || video.ended) {
+            mediaRecorder.stop()
+            return
+          }
+          processFrame()
+          requestAnimationFrame(drawFrame)
         }
-        // Remove the event listener after first use
-        video.removeEventListener("seeked", onSeeked)
-      })
+        drawFrame()
+      }
 
-      // Start the process
-      video.currentTime = 0
-    } catch (error) {
-      console.error("Error processing video:", error)
+      // Handle video end
+      video.onended = () => {
+        mediaRecorder.stop()
+        video.onplaying = null
+        video.onended = null
+      }
+
+      // Start playback
+      await video.play()
+
+    } catch (error: unknown) {
+      console.error('Error processing video:', error)
     }
   }
 
@@ -587,7 +642,7 @@ export default function VideoPrivacyMasker() {
                       onClick={() => {
                         const a = document.createElement("a")
                         a.href = processedVideoUrl
-                        a.download = "masked-video.webm"
+                        a.download = "masked-video.mp4"
                         a.click()
                       }}
                     >
@@ -603,28 +658,26 @@ export default function VideoPrivacyMasker() {
             <Card className="md:col-span-2">
               <CardContent className="p-4 space-y-4">
                 <div className="relative rounded-md overflow-hidden bg-black flex items-center justify-center">
-                  {/* Hidden video element for source */}
+                  {/* Video element for preview and source */}
                   <video
                     ref={videoRef}
                     src={videoUrl}
-                    className="hidden"
+                    className="max-w-full max-h-[50vh] w-auto h-auto"
                     onTimeUpdate={updateVideoTime}
                     onLoadedMetadata={handleVideoLoaded}
                     playsInline
                   />
 
-                  {/* Canvas for displaying video frames */}
-                  <div className="relative">
+                  {/* Canvas elements positioned absolutely over the video */}
+                  <div className="absolute top-0 left-0 w-full h-full">
                     <canvas
                       ref={canvasRef}
-                      className="block max-w-full max-h-[50vh] w-auto h-auto"
+                      className="absolute top-0 left-0 w-full h-full"
                       onMouseDown={handleCanvasMouseDown}
                       onMouseMove={handleCanvasMouseMove}
                       onMouseUp={handleCanvasMouseUp}
                       onMouseLeave={handleCanvasMouseUp}
                     />
-
-                    {/* Overlay canvas for drawing masks */}
                     <canvas
                       ref={overlayCanvasRef}
                       className="absolute top-0 left-0 w-full h-full pointer-events-none"
