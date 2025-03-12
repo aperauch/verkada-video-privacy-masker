@@ -548,6 +548,26 @@ export default function VideoPrivacyMasker() {
     }
   }, [videoUrl, processedVideoUrl])
 
+  // Add this new function after handleFileChange
+  const handleRemoveVideo = () => {
+    // Clean up the video URL
+    if (videoUrl) {
+      URL.revokeObjectURL(videoUrl)
+    }
+    if (processedVideoUrl) {
+      URL.revokeObjectURL(processedVideoUrl)
+    }
+
+    // Reset all states
+    setVideoFile(null)
+    setVideoUrl(null)
+    setIsPlaying(false)
+    setVideoTime(0)
+    setVideoDuration(0)
+    setMasks([])
+    setProcessedVideoUrl(null)
+  }
+
   return (
     <div className="grid grid-cols-1 gap-6">
       {/* Upload area */}
@@ -557,7 +577,7 @@ export default function VideoPrivacyMasker() {
             <div className="text-center">
               <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium mb-2">Upload a video</h3>
-              <p className="text-sm text-muted-foreground mb-4">Support for MP4, WebM, and other common formats</p>
+              <p className="text-sm text-muted-foreground mb-4">Support for MP4, WebM, and other common formats.</p>
               <Button onClick={() => document.getElementById("video-upload")?.click()}>Select Video</Button>
               <input id="video-upload" type="file" accept="video/*" className="hidden" onChange={handleFileChange} />
             </div>
@@ -689,14 +709,20 @@ export default function VideoPrivacyMasker() {
 
                 {/* Video controls */}
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="icon" onClick={togglePlayPause}>
-                      {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                    </Button>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="icon" onClick={togglePlayPause}>
+                        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      </Button>
 
-                    <span className="text-xs">
-                      {formatTime(videoTime)} / {formatTime(videoDuration)}
-                    </span>
+                      <span className="text-xs">
+                        {formatTime(videoTime)} / {formatTime(videoDuration)}
+                      </span>
+                    </div>
+
+                    <Button variant="destructive" size="sm" onClick={handleRemoveVideo}>
+                      Remove Video
+                    </Button>
                   </div>
 
                   <Slider
