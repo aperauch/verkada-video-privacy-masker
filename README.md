@@ -33,6 +33,9 @@ A web-based tool for adding privacy masks to videos. This application allows use
   - Automatic quality preservation
   - Download processed videos in MP4 format
 
+## Live Preview
+https://verkada-video-privacy-masker.vercel.app/
+
 ## Getting Started
 
 ### Prerequisites
@@ -44,8 +47,8 @@ A web-based tool for adding privacy masks to videos. This application allows use
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/v0-video-privacy-masker.git
-   cd v0-video-privacy-masker
+   git clone https://github.com/aperauch/verkada-video-privacy-masker
+   cd verkada-video-privacy-masker
    ```
 
 2. Install dependencies:
