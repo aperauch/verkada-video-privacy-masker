@@ -23,6 +23,7 @@ export default function VideoPrivacyMasker() {
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null)
   const [currentMask, setCurrentMask] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
   const [processedVideoUrl, setProcessedVideoUrl] = useState<string | null>(null)
+  const [removeAudio, setRemoveAudio] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -51,28 +52,63 @@ export default function VideoPrivacyMasker() {
   }
 
   // Video playback controls
-  const togglePlayPause = () => {
+  const togglePlayPause = async () => {
     if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause()
-      } else {
-        videoRef.current.play()
+      // Ensure the video's current time is set to the videoTime state value
+      if (!isPlaying) {
+        videoRef.current.currentTime = videoTime;
       }
-      setIsPlaying(!isPlaying)
+
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        // Function to process current frame
+        const processFrame = () => {
+          // Draw the current frame
+          if (canvasRef.current && videoRef.current) {
+            const ctx = canvasRef.current?.getContext("2d")
+
+            if (ctx) {
+              // Set canvas dimensions to match video
+              canvasRef.current.width = videoRef.current.videoWidth
+              canvasRef.current.height = videoRef.current.videoHeight
+
+              // Draw the current video frame
+              ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height)
+            }
+          }
+        }
+
+        // Handle video playback
+        videoRef.current.onplaying = () => {
+          const drawFrame = () => {
+            if (videoRef.current?.paused || videoRef.current?.ended) {
+              return
+            }
+            processFrame()
+            requestAnimationFrame(drawFrame)
+          }
+          drawFrame()
+        }
+        
+        await videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
     }
   }
 
   const updateVideoTime = () => {
     if (videoRef.current) {
-      setVideoTime(videoRef.current.currentTime)
+      setVideoTime(videoRef.current.currentTime);
     }
   }
 
   const handleTimeChange = (value: number[]) => {
     if (videoRef.current) {
-      videoRef.current.currentTime = value[0]
-      setVideoTime(value[0])
-      drawFrame()
+      // Update the video's current time to match the slider value
+      videoRef.current.currentTime = value[0];
+      setVideoTime(value[0]);
+      drawFrame();
     }
   }
 
@@ -80,7 +116,7 @@ export default function VideoPrivacyMasker() {
     if (videoRef.current) {
       setVideoDuration(videoRef.current.duration)
       // Draw the first frame
-      drawFrame()
+      drawFrame();
     }
   }
 
@@ -193,7 +229,7 @@ export default function VideoPrivacyMasker() {
 
   // Process video with masks
   const processVideo = async () => {
-    if (!videoRef.current || !canvasRef.current || masks.length === 0) return
+    if (!videoRef.current || !canvasRef.current || masks.length === 0 || !videoFile) return
 
     const video = videoRef.current
     const canvas = document.createElement('canvas')
@@ -210,14 +246,19 @@ export default function VideoPrivacyMasker() {
     setIsPlaying(false)
 
     try {
+      // Estimate the video bitrate from the file size and duration
+      const estimatedBitrate = (videoFile.size * 8) / video.duration // in bits per second
+
       // Create a MediaStream from the canvas
-      const videoStream = canvas.captureStream()
+      const videoStream = canvas.captureStream(24) // Capture at 24 fps
       
-      // Get the audio track from the original video
-      const audioStream = (video as any).captureStream()
-      const audioTrack = audioStream?.getAudioTracks?.()?.[0]
-      if (audioTrack) {
-        videoStream.addTrack(audioTrack)
+      // Get the audio track from the original video if not removing audio
+      if (!removeAudio) {
+        const audioStream = (video as any).captureStream()
+        const audioTrack = audioStream?.getAudioTracks?.()?.[0]
+        if (audioTrack) {
+          videoStream.addTrack(audioTrack)
+        }
       }
 
       // Check for H.264 support
@@ -227,10 +268,10 @@ export default function VideoPrivacyMasker() {
           ? 'video/mp4'
           : 'video/webm;codecs=h264,opus'
 
-      // Create MediaRecorder with H.264 encoding
+      // Create MediaRecorder with estimated bitrate
       const mediaRecorder = new MediaRecorder(videoStream, {
         mimeType,
-        videoBitsPerSecond: 8000000 // 8 Mbps for better quality
+        videoBitsPerSecond: estimatedBitrate
       })
 
       const chunks: Blob[] = []
@@ -249,66 +290,8 @@ export default function VideoPrivacyMasker() {
           URL.revokeObjectURL(processedVideoUrl)
         }
 
-        // If we couldn't use MP4 directly, we need to convert the WebM to MP4
-        if (!mimeType.startsWith('video/mp4')) {
-          // Create a temporary video element to convert the format
-          const tempVideo = document.createElement('video')
-          tempVideo.src = URL.createObjectURL(blob)
-          tempVideo.muted = true
-
-          tempVideo.onloadedmetadata = () => {
-            const convertCanvas = document.createElement('canvas')
-            convertCanvas.width = tempVideo.videoWidth
-            convertCanvas.height = tempVideo.videoHeight
-            const convertCtx = convertCanvas.getContext('2d')!
-
-            // Start playing to begin conversion
-            tempVideo.play().then(() => {
-              const convertedChunks: Blob[] = []
-              const convertedStream = convertCanvas.captureStream()
-              
-              // Add audio if available
-              if (audioTrack) {
-                convertedStream.addTrack(audioTrack)
-              }
-
-              const convertedRecorder = new MediaRecorder(convertedStream, {
-                mimeType: 'video/mp4;codecs=h264,aac',
-                videoBitsPerSecond: 8000000
-              })
-
-              convertedRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) {
-                  convertedChunks.push(e.data)
-                }
-              }
-
-              convertedRecorder.onstop = () => {
-                const convertedBlob = new Blob(convertedChunks, { type: 'video/mp4' })
-                const url = URL.createObjectURL(convertedBlob)
-                setProcessedVideoUrl(url)
-                URL.revokeObjectURL(tempVideo.src)
-              }
-
-              // Draw frames for conversion
-              const convertFrame = () => {
-                if (tempVideo.ended || tempVideo.paused) {
-                  convertedRecorder.stop()
-                  return
-                }
-                convertCtx.drawImage(tempVideo, 0, 0, convertCanvas.width, convertCanvas.height)
-                requestAnimationFrame(convertFrame)
-              }
-
-              convertedRecorder.start(1000)
-              convertFrame()
-            })
-          }
-        } else {
-          // We got MP4 directly, just use it
-          const url = URL.createObjectURL(blob)
-          setProcessedVideoUrl(url)
-        }
+        const url = URL.createObjectURL(blob)
+        setProcessedVideoUrl(url)
       }
 
       // Request data frequently to ensure we capture everything
@@ -566,7 +549,25 @@ export default function VideoPrivacyMasker() {
     setVideoDuration(0)
     setMasks([])
     setProcessedVideoUrl(null)
+    setRemoveAudio(false)
   }
+
+  useEffect(() => {
+    if (videoRef.current) {
+      const handlePlay = () => setIsPlaying(true);
+      const handlePause = () => setIsPlaying(false);
+
+      videoRef.current.addEventListener('play', handlePlay);
+      videoRef.current.addEventListener('pause', handlePause);
+
+      return () => {
+        if (videoRef.current) {
+          videoRef.current.removeEventListener('play', handlePlay);
+          videoRef.current.removeEventListener('pause', handlePause);
+        }
+      };
+    }
+  }, [videoRef]);
 
   return (
     <div className="grid grid-cols-1 gap-6">
@@ -590,7 +591,7 @@ export default function VideoPrivacyMasker() {
         <>
           <div className="grid md:grid-cols-3 gap-6">
             {/* Left panel: Controls */}
-            <Card className="md:col-span-1">
+            <Card className="md:col-span-1" id="mask-controls-card">
               <CardContent className="p-4 space-y-4">
                 <h3 className="text-lg font-medium mb-4">Mask Controls</h3>
 
@@ -640,44 +641,39 @@ export default function VideoPrivacyMasker() {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground">Draw on the video to create masks</p>
+                    <p className="text-sm text-muted-foreground">Draw on the video to create masks.</p>
                   )}
 
                   {masks.length > 0 && (
-                    <Button variant="outline" size="sm" className="mt-2 w-full" onClick={clearAllMasks}>
+                    <Button variant="outline" size="sm" className="mt-2 w-full" onClick={clearAllMasks} id="clear-all-masks-button">
                       Clear All Masks
                     </Button>
                   )}
                 </div>
 
-                <div className="pt-4">
-                  <Button className="w-full" onClick={processVideo} disabled={masks.length === 0}>
+                <div className="flex flex-col justify-end flex-grow">
+                  {/* Remove Audio Checkbox */}
+                  <div className="flex items-center space-x-2 mb-2">
+                    <input
+                      id="remove-audio-checkbox"
+                      type="checkbox"
+                      checked={removeAudio}
+                      onChange={(e) => setRemoveAudio(e.target.checked)}
+                      className="form-checkbox"
+                      style={{ accentColor: removeAudio ? '#007faf' : undefined }}
+                    />
+                    <span className="text-sm font-medium">Remove Audio</span>
+                  </div>
+
+                  <Button id="process-video-button" className="w-full" onClick={processVideo} disabled={masks.length === 0 && !removeAudio}>
                     Process Video
                   </Button>
                 </div>
-
-                {processedVideoUrl && (
-                  <div className="pt-2">
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => {
-                        const a = document.createElement("a")
-                        a.href = processedVideoUrl
-                        a.download = "masked-video.mp4"
-                        a.click()
-                      }}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Download Processed Video
-                    </Button>
-                  </div>
-                )}
               </CardContent>
             </Card>
 
             {/* Right panel: Video preview */}
-            <Card className="md:col-span-2">
+            <Card className="md:col-span-2" id="video-preview-card">
               <CardContent className="p-4 space-y-4">
                 <div className="relative rounded-md overflow-hidden bg-black flex items-center justify-center">
                   {/* Video element for preview and source */}
@@ -711,7 +707,7 @@ export default function VideoPrivacyMasker() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <Button variant="outline" size="icon" onClick={togglePlayPause}>
+                      <Button variant="outline" size="icon" onClick={togglePlayPause} id="play-pause-button">
                         {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                       </Button>
 
@@ -720,12 +716,13 @@ export default function VideoPrivacyMasker() {
                       </span>
                     </div>
 
-                    <Button variant="destructive" size="sm" onClick={handleRemoveVideo}>
+                    <Button variant="destructive" size="sm" onClick={handleRemoveVideo} id="remove-video-button">
                       Remove Video
                     </Button>
                   </div>
 
                   <Slider
+                    id="video-time-slider"
                     value={[videoTime]}
                     min={0}
                     max={videoDuration || 100}
@@ -739,7 +736,7 @@ export default function VideoPrivacyMasker() {
 
           {/* Processed video preview */}
           {processedVideoUrl && (
-            <Card>
+            <Card id="processed-video-card">
               <CardContent className="p-4">
                 <h3 className="text-lg font-medium mb-4">Processed Video</h3>
                 <div className="rounded-md overflow-hidden bg-black flex items-center justify-center">
@@ -749,6 +746,21 @@ export default function VideoPrivacyMasker() {
                     className="max-w-full max-h-[50vh] w-auto h-auto"
                     playsInline
                   />
+                </div>
+                <div className="flex justify-center pt-4">
+                  <Button
+                    id="download-video-button"
+                    style={{ backgroundColor: '#007faf', color: '#fff' }}
+                    onClick={() => {
+                      const a = document.createElement("a")
+                      a.href = processedVideoUrl
+                      a.download = "masked-video.mp4"
+                      a.click()
+                    }}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Video
+                  </Button>
                 </div>
               </CardContent>
             </Card>
