@@ -16,7 +16,7 @@ export default function VideoPrivacyMasker() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [videoTime, setVideoTime] = useState(0)
   const [videoDuration, setVideoDuration] = useState(0)
-  const [maskType, setMaskType] = useState<"blur" | "pixelate" | "solid">("blur")
+  const [maskType, setMaskType] = useState<"blur" | "pixelate" | "solid">("solid")
   const [maskIntensity, setMaskIntensity] = useState(10)
   const [masks, setMasks] = useState<{ x: number; y: number; width: number; height: number }[]>([])
   const [isDrawing, setIsDrawing] = useState(false)
@@ -584,23 +584,25 @@ export default function VideoPrivacyMasker() {
                       <SelectValue placeholder="Select mask type" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="solid">Solid Color</SelectItem>
                       <SelectItem value="blur">Blur</SelectItem>
                       <SelectItem value="pixelate">Pixelate</SelectItem>
-                      <SelectItem value="solid">Solid Color</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Effect Intensity ({maskIntensity})</Label>
-                  <Slider
-                    value={[maskIntensity]}
-                    min={1}
-                    max={20}
-                    step={1}
-                    onValueChange={(value) => setMaskIntensity(value[0])}
-                  />
-                </div>
+                {maskType !== "solid" && (
+                  <div className="space-y-2">
+                    <Label>Effect Intensity ({maskIntensity})</Label>
+                    <Slider
+                      value={[maskIntensity]}
+                      min={1}
+                      max={20}
+                      step={1}
+                      onValueChange={(value) => setMaskIntensity(value[0])}
+                    />
+                  </div>
+                )}
 
                 <div className="pt-4">
                   <h4 className="text-sm font-medium mb-2">Active Masks: {masks.length}</h4>
