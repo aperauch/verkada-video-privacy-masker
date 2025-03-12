@@ -24,6 +24,7 @@ export default function VideoPrivacyMasker() {
   const [currentMask, setCurrentMask] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
   const [processedVideoUrl, setProcessedVideoUrl] = useState<string | null>(null)
   const [removeAudio, setRemoveAudio] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -52,7 +53,7 @@ export default function VideoPrivacyMasker() {
   }
 
   // Video playback controls
-  const togglePlayPause = async () => {
+  const togglePlayPause = () => {
     if (videoRef.current) {
       // Ensure the video's current time is set to the videoTime state value
       if (!isPlaying) {
@@ -78,22 +79,34 @@ export default function VideoPrivacyMasker() {
             }
           }
         }
-
+        
         // Handle video playback
         videoRef.current.onplaying = () => {
           const drawFrame = () => {
             if (videoRef.current?.paused || videoRef.current?.ended) {
-              return
+              setIsPlaying(false);
+              return;
             }
-            processFrame()
-            requestAnimationFrame(drawFrame)
+            setIsPlaying(true);
+            processFrame();
+            requestAnimationFrame(drawFrame);
           }
-          drawFrame()
+          drawFrame();
         }
         
-        await videoRef.current.play();
+        videoRef.current.play();
       }
-      setIsPlaying(!isPlaying);
+
+      // Handle video end
+      if (videoRef.current) {
+        videoRef.current.onended = () => {
+          if (videoRef.current) {
+            videoRef.current.onplaying = null;
+            videoRef.current.onended = null;
+          }
+          setIsPlaying(false);
+        };
+      }
     }
   }
 
@@ -123,17 +136,17 @@ export default function VideoPrivacyMasker() {
   // Drawing functions
   const drawFrame = useCallback(() => {
     if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current
-      const canvas = canvasRef.current
-      const ctx = canvas.getContext("2d")
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
 
       if (ctx) {
         // Set canvas dimensions to match video
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
 
         // Draw the current video frame
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       }
     }
   }, [])
@@ -228,36 +241,46 @@ export default function VideoPrivacyMasker() {
   }, [isDrawing, currentMask, masks])
 
   // Process video with masks
-  const processVideo = async () => {
-    if (!videoRef.current || !canvasRef.current || masks.length === 0 || !videoFile) return
+  const processVideo = () => {
+    if (!videoRef.current || !canvasRef.current || masks.length === 0 || !videoFile) return;
 
-    const video = videoRef.current
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
+    setIsProcessing(true);
+    // Disable controls
+    const processButton = document.getElementById('process-video-button') as HTMLButtonElement;
+    const playPauseButton = document.getElementById('play-pause-button') as HTMLButtonElement;
+    const videoSlider = document.getElementById('video-time-slider') as HTMLInputElement;
 
-    if (!ctx) return
+    if (processButton) processButton.disabled = true;
+    if (playPauseButton) playPauseButton.disabled = true;
+    if (videoSlider) videoSlider.disabled = true;
+
+    //const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    if (!ctx) return;
 
     // Set canvas dimensions to match video
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
 
     // Pause the video during processing
-    video.pause()
-    setIsPlaying(false)
+    videoRef.current.pause();
+    setIsPlaying(false);
 
     try {
       // Estimate the video bitrate from the file size and duration
-      const estimatedBitrate = (videoFile.size * 8) / video.duration // in bits per second
+      const estimatedBitrate = (videoFile.size * 8) / videoRef.current.duration; // in bits per second
 
       // Create a MediaStream from the canvas
-      const videoStream = canvas.captureStream(24) // Capture at 24 fps
+      const videoStream = canvas.captureStream(24); // Capture at 24 fps
       
       // Get the audio track from the original video if not removing audio
       if (!removeAudio) {
-        const audioStream = (video as any).captureStream()
-        const audioTrack = audioStream?.getAudioTracks?.()?.[0]
+        const audioStream = (videoRef.current as any).captureStream();
+        const audioTrack = audioStream?.getAudioTracks?.()?.[0];
         if (audioTrack) {
-          videoStream.addTrack(audioTrack)
+          videoStream.addTrack(audioTrack);
         }
       }
 
@@ -266,78 +289,98 @@ export default function VideoPrivacyMasker() {
         ? 'video/mp4;codecs=h264,aac'
         : MediaRecorder.isTypeSupported('video/mp4') 
           ? 'video/mp4'
-          : 'video/webm;codecs=h264,opus'
+          : 'video/webm;codecs=h264,opus';
 
       // Create MediaRecorder with estimated bitrate
       const mediaRecorder = new MediaRecorder(videoStream, {
         mimeType,
         videoBitsPerSecond: estimatedBitrate
-      })
+      });
 
-      const chunks: Blob[] = []
+      const chunks: Blob[] = [];
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
-          chunks.push(e.data)
+          chunks.push(e.data);
         }
-      }
+      };
 
       mediaRecorder.onstop = () => {
         // Determine the correct MIME type for the Blob
-        const blobType = mimeType.startsWith('video/mp4') ? 'video/mp4' : 'video/webm'
-        const blob = new Blob(chunks, { type: blobType })
+        const blobType = mimeType.startsWith('video/mp4') ? 'video/mp4' : 'video/webm';
+        const blob = new Blob(chunks, { type: blobType });
         
         if (processedVideoUrl) {
-          URL.revokeObjectURL(processedVideoUrl)
+          URL.revokeObjectURL(processedVideoUrl);
         }
 
-        const url = URL.createObjectURL(blob)
-        setProcessedVideoUrl(url)
-      }
+        const url = URL.createObjectURL(blob);
+        setProcessedVideoUrl(url);
+        setIsProcessing(false);
+
+        // Re-enable controls
+        if (processButton) processButton.disabled = false;
+        if (playPauseButton) playPauseButton.disabled = false;
+        if (videoSlider) videoSlider.disabled = false;
+      };
 
       // Request data frequently to ensure we capture everything
-      mediaRecorder.start(1000) // Capture in 1-second chunks
+      mediaRecorder.start(1000); // Capture in 1-second chunks
 
       // Reset video to beginning
-      video.currentTime = 0
+      videoRef.current.currentTime = 0;
 
       // Function to process current frame
       const processFrame = () => {
         // Draw the current frame
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        if (videoRef.current) {
+          ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        }
         
         // Apply masks
         masks.forEach((mask) => {
-          applyMaskEffect(ctx, mask)
-        })
-      }
+          applyMaskEffect(ctx, mask);
+        });
+      };
 
       // Handle video playback
-      video.onplaying = () => {
-        const drawFrame = () => {
-          if (video.paused || video.ended) {
-            mediaRecorder.stop()
-            return
-          }
-          processFrame()
-          requestAnimationFrame(drawFrame)
-        }
-        drawFrame()
+      if (videoRef.current) {
+        videoRef.current.onplaying = () => {
+          const drawFrame = () => {
+            if (videoRef.current && (videoRef.current.paused || videoRef.current.ended)) {
+              mediaRecorder.stop();
+              return;
+            }
+            processFrame();
+            requestAnimationFrame(drawFrame);
+          };
+          drawFrame();
+        };
       }
 
       // Handle video end
-      video.onended = () => {
-        mediaRecorder.stop()
-        video.onplaying = null
-        video.onended = null
+      if (videoRef.current) {
+        videoRef.current.onended = () => {
+          mediaRecorder.stop();
+          if (videoRef.current) {
+            videoRef.current.onplaying = null;
+            videoRef.current.onended = null;
+          }
+          setIsPlaying(false);
+        };
       }
 
       // Start playback
-      await video.play()
+      videoRef.current.play();
 
     } catch (error: unknown) {
-      console.error('Error processing video:', error)
+      console.error('Error processing video:', error);
+      setIsProcessing(false);
+      // Re-enable controls on error
+      if (processButton) processButton.disabled = false;
+      if (playPauseButton) playPauseButton.disabled = false;
+      if (videoSlider) videoSlider.disabled = false;
     }
-  }
+  };
 
   const applyMaskEffect = (
     ctx: CanvasRenderingContext2D,
@@ -491,17 +534,18 @@ export default function VideoPrivacyMasker() {
   // Update canvas when video updates
   useEffect(() => {
     if (videoRef.current) {
-      videoRef.current.addEventListener("timeupdate", updateVideoTime)
-      videoRef.current.addEventListener("play", () => setIsPlaying(true))
-      videoRef.current.addEventListener("pause", () => setIsPlaying(false))
-      videoRef.current.addEventListener("loadedmetadata", handleVideoLoaded)
+      videoRef.current.addEventListener("timeupdate", updateVideoTime);
+      videoRef.current.addEventListener("play", () => setIsPlaying(true));
+      videoRef.current.addEventListener("pause", () => setIsPlaying(false));
+      videoRef.current.addEventListener("loadedmetadata", handleVideoLoaded);
 
       return () => {
         if (videoRef.current) {
-          videoRef.current.removeEventListener("timeupdate", updateVideoTime)
-          videoRef.current.removeEventListener("play", () => setIsPlaying(true))
-          videoRef.current.removeEventListener("pause", () => setIsPlaying(false))
-          videoRef.current.removeEventListener("loadedmetadata", handleVideoLoaded)
+          videoRef.current.removeEventListener("timeupdate", updateVideoTime);
+          videoRef.current.removeEventListener("play", () => setIsPlaying(true));
+          videoRef.current.removeEventListener("pause", () => setIsPlaying(false));
+          videoRef.current.removeEventListener("loadedmetadata", handleVideoLoaded);
+          videoRef.current.removeEventListener("ended", () => setIsPlaying(false));
         }
       }
     }
@@ -569,8 +613,20 @@ export default function VideoPrivacyMasker() {
     }
   }, [videoRef]);
 
+  // Mute the audio if removeAudio is true
+  if (videoRef.current) {
+    videoRef.current.muted = removeAudio;
+  }
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.addEventListener('ended', () => setIsPlaying(false));
+    }
+  }, [videoRef]);
+
   return (
     <div className="grid grid-cols-1 gap-6">
+      {isProcessing && <div className="spinner">Processing...</div>}
       {/* Upload area */}
       {!videoUrl && (
         <Card>
@@ -666,7 +722,7 @@ export default function VideoPrivacyMasker() {
                   </div>
 
                   <Button id="process-video-button" className="w-full" onClick={processVideo} disabled={masks.length === 0 && !removeAudio}>
-                    Process Video
+                    {isProcessing ? <div className="spinner">Loading...</div> : "Process Video"}
                   </Button>
                 </div>
               </CardContent>
@@ -728,6 +784,7 @@ export default function VideoPrivacyMasker() {
                     max={videoDuration || 100}
                     step={0.01}
                     onValueChange={handleTimeChange}
+                    disabled={isProcessing}
                   />
                 </div>
               </CardContent>
